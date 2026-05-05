@@ -1,12 +1,17 @@
+project:
+  name: can-ids-full-cloud-pipeline
+  environment: cloud
 
 gcp:
   project_id: project-e6de9b55-41d5-4f13-ae0
   region: europe-southwest1
   bucket_name: can-ids-data
+  temp_bucket: can-ids-data
 
 storage:
-  source_prefix: raw/
-  source_format: parquet
+  raw_prefix: raw/
+  config_path: config/config.yml
+  dbc_path: dbc/hyundai_2015_ccan.dbc
 
 bigquery:
   location: europe-southwest1
@@ -15,83 +20,28 @@ bigquery:
     bronze: can_ids_bronze
     silver: can_ids_silver
     gold: can_ids_gold
+    audit: can_ids_audit
 
   tables:
     bronze_raw: messages_raw
     bronze_rejected: messages_rejected
-    pipeline_runs: pipeline_runs
 
     silver_clean: messages_clean
     silver_iat: messages_with_iat
     silver_decoded: messages_decoded
-
     quality_silver_report: quality_silver_report
     quality_silver_alerts: quality_silver_alerts
 
-
     gold_features: features_gold
 
-
-ingestion:
-  write_disposition: WRITE_APPEND
-  skip_existing_files: true
-
-metadata_columns:
-  source_file: source_file
-  ingestion_time: ingestion_time
-  batch_id: batch_id
-
-
-
-source_columns:
-  timestamp_index: timestamp
-  timestamp_us: timestamp_us
-  arbitration_id: arbitration_id
-  dlc: dlc
-  data: data
-  label: label
-
-
+    pipeline_runs: pipeline_runs
 
 can_rules:
-  accepted_dlc_values: [0, 1, 2, 3, 4, 5, 6, 7, 8]
-  required_columns:
-    - timestamp
-    - can_id
-    - dlc
-    - data
-
-
-quality_rules:
   arbitration_id_min: 0
   arbitration_id_max: 2047
   dlc_min: 0
   dlc_max: 8
   accepted_labels: [0, 1]
 
-quality:
-  check_schema: true
-  check_nulls: true
-  check_duplicates: true
-  check_dlc_range: true
-  check_payload_not_empty: true
-  max_null_ratio: 0.05
-
-
-dbc:
-  file_path: dbc/can_database.dbc
-
-decoding:
-  batch_size: 50000
-  skip_unknown_messages: true
- 
- 
-dbt:
-  project_dir: dbt_project
-  target: dev
-
-airflow:
-  dags:
-    ingestion: dag_01_ingestion_bronze
-    silver: dag_02_dbt_silver
-    gold: dag_03_dbt_gold
+ingestion:
+  skip_existing_files: true
