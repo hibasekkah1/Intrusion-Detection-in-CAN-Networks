@@ -30,7 +30,7 @@ def create_cluster():
             },
             "master_config": {
                 "num_instances": 1,
-                "machine_type_uri": "n2-standard-4",
+                "machine_type_uri": "n2-standard-2",
                 "disk_config": {
                     "boot_disk_type": "pd-standard",
                     "boot_disk_size_gb": 100,
@@ -38,7 +38,7 @@ def create_cluster():
             },
             "worker_config": {
                 "num_instances": 2,
-                "machine_type_uri": "n2-standard-4",
+                "machine_type_uri": "n2-standard-2",
                 "disk_config": {
                     "boot_disk_type": "pd-standard",
                     "boot_disk_size_gb": 100,
@@ -47,14 +47,17 @@ def create_cluster():
             "software_config": {
                 "image_version": "2.2-debian12",
                 "properties": {
-                    "spark:spark.sql.shuffle.partitions": "400",
-                    "spark:spark.executor.memory": "8g",
-                    "spark:spark.driver.memory": "8g",
+                    "spark:spark.sql.shuffle.partitions": "200",
+                    "spark:spark.executor.memory": "4g",
+                    "spark:spark.driver.memory": "4g",
                 },
             },
             "initialization_actions": [
                 {
-                    "executable_file": INIT_ACTION_URI
+                    "executable_file": INIT_ACTION_URI,
+                    "execution_timeout": {
+                        "seconds": 1800
+                    },
                 }
             ],
         },

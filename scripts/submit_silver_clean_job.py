@@ -5,10 +5,10 @@ PROJECT_ID = "project-e6de9b55-41d5-4f13-ae0"
 REGION = "europe-southwest1"
 CLUSTER_NAME = "can-ids-spark-cluster"
 
-BRONZE_SCRIPT_URI = "gs://can-ids-data/spark_jobs/bronze_ingestion_spark.py"
+SILVER_SCRIPT_URI = "gs://can-ids-data/spark_jobs/silver_clean_spark.py"
 CONFIG_URI = "gs://can-ids-data/config/config.yml"
 
-STEP_LABEL = "bronze-ingestion-spark"
+STEP_LABEL = "silver-clean-spark"
 
 
 def get_job_client():
@@ -44,13 +44,13 @@ def get_running_jobs_for_step(client):
     return running_jobs
 
 
-def submit_bronze_job():
+def submit_silver_clean_job():
     client = get_job_client()
 
     running_jobs = get_running_jobs_for_step(client)
 
     if running_jobs:
-        print("Un job Bronze ingestion est déjà en cours. Aucun nouveau job n'a été soumis.")
+        print("Un job Silver Clean est déjà en cours. Aucun nouveau job n'a été soumis.")
         print("")
 
         for job in running_jobs:
@@ -82,7 +82,7 @@ def submit_bronze_job():
             "step": STEP_LABEL,
         },
         "pyspark_job": {
-            "main_python_file_uri": BRONZE_SCRIPT_URI,
+            "main_python_file_uri": SILVER_SCRIPT_URI,
             "args": [
                 "--config_path",
                 CONFIG_URI,
@@ -101,7 +101,7 @@ def submit_bronze_job():
     job_id = submitted_job.reference.job_id
     state = submitted_job.status.state.name
 
-    print("Job Bronze ingestion soumis avec succès.")
+    print("Job Silver Clean soumis avec succès.")
     print(f"Job ID : {job_id}")
     print(f"Statut initial : {state}")
     print("")
@@ -121,4 +121,4 @@ def submit_bronze_job():
 
 
 if __name__ == "__main__":
-    submit_bronze_job()
+    submit_silver_clean_job()

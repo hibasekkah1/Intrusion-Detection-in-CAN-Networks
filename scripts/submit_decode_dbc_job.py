@@ -5,10 +5,11 @@ PROJECT_ID = "project-e6de9b55-41d5-4f13-ae0"
 REGION = "europe-southwest1"
 CLUSTER_NAME = "can-ids-spark-cluster"
 
-BRONZE_SCRIPT_URI = "gs://can-ids-data/spark_jobs/bronze_ingestion_spark.py"
+DECODE_SCRIPT_URI = "gs://can-ids-data/spark_jobs/decode_dbc_spark.py"
 CONFIG_URI = "gs://can-ids-data/config/config.yml"
+DBC_URI = "gs://can-ids-data/dbc/hyundai_2015_ccan.dbc"
 
-STEP_LABEL = "bronze-ingestion-spark"
+STEP_LABEL = "dbc-decoding-spark"
 
 
 def get_job_client():
@@ -44,13 +45,13 @@ def get_running_jobs_for_step(client):
     return running_jobs
 
 
-def submit_bronze_job():
+def submit_decode_dbc_job():
     client = get_job_client()
 
     running_jobs = get_running_jobs_for_step(client)
 
     if running_jobs:
-        print("Un job Bronze ingestion est déjà en cours. Aucun nouveau job n'a été soumis.")
+        print("Un job DBC decoding est déjà en cours. Aucun nouveau job n'a été soumis.")
         print("")
 
         for job in running_jobs:
@@ -82,10 +83,12 @@ def submit_bronze_job():
             "step": STEP_LABEL,
         },
         "pyspark_job": {
-            "main_python_file_uri": BRONZE_SCRIPT_URI,
+            "main_python_file_uri": DECODE_SCRIPT_URI,
             "args": [
                 "--config_path",
                 CONFIG_URI,
+                "--dbc_path",
+                DBC_URI,
             ],
         },
     }
@@ -101,7 +104,7 @@ def submit_bronze_job():
     job_id = submitted_job.reference.job_id
     state = submitted_job.status.state.name
 
-    print("Job Bronze ingestion soumis avec succès.")
+    print("Job Spark DBC decoding soumis avec succès.")
     print(f"Job ID : {job_id}")
     print(f"Statut initial : {state}")
     print("")
@@ -121,4 +124,4 @@ def submit_bronze_job():
 
 
 if __name__ == "__main__":
-    submit_bronze_job()
+    submit_decode_dbc_job()

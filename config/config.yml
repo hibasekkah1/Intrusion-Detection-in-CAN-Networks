@@ -32,9 +32,15 @@ bigquery:
     quality_silver_report: quality_silver_report
     quality_silver_alerts: quality_silver_alerts
 
-    gold_features: features_gold
+    
+    gold_features_window: gold_features_window
+    can_id_profile: can_id_profile
+    dbc_messages_reference: dbc_messages_reference
+
 
     pipeline_runs: pipeline_runs
+    file_processing_status: file_processing_status
+    quality_reports: quality_reports
 
 can_rules:
   arbitration_id_min: 0
