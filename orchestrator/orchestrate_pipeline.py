@@ -442,6 +442,14 @@ def run_pipeline():
                 CONFIG_URI,
             ],
         )
+        submit_and_wait(
+            step_label="gx-quality-spark",
+            script_uri="gs://can-ids-data/spark_jobs/gx_quality_spark.py",
+            args=[
+                "--config_path",
+                CONFIG_URI,
+            ],
+        )
 
         log("Pipeline CAN IDS terminé avec succès.")
 

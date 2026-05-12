@@ -10,6 +10,7 @@ gsutil -m cp gs://can-ids-data/wheelhouse/* /tmp/wheelhouse/
 
 echo "Installing cantools offline..."
 python3 -m pip install --no-index --find-links=/tmp/wheelhouse cantools
+python3 -m pip install --no-index --find-links=/tmp/wheelhouse great_expectations==0.18.21
 
 echo "Testing imports..."
 python3 -c "import cantools; print('cantools OK')"
