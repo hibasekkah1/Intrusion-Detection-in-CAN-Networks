@@ -22,13 +22,11 @@ DBC_URI = os.getenv("DBC_URI", "gs://can-ids-data/dbc/hyundai_2015_ccan.dbc")
 
 TEMP_BUCKET = os.getenv("TEMP_BUCKET", "can-ids-data")
 
-
 INIT_ACTION_URI = os.getenv("INIT_ACTION_URI", "")
 DELETE_CLUSTER_AT_END = os.getenv("DELETE_CLUSTER_AT_END", "true").lower() == "true"
 
-AUDIT_FILE_STATUS_TABLE = (
-    f"{PROJECT_ID}.can_ids_audit.file_processing_status"
-)
+AUDIT_FILE_STATUS_TABLE = f"{PROJECT_ID}.can_ids_audit.file_processing_status"
+
 
 ANALYST_VIEW_SQL = f"""
 CREATE OR REPLACE VIEW `{PROJECT_ID}.can_ids_gold.vw_gold_features_analyst` AS
@@ -71,12 +69,88 @@ ON f.arbitration_id = p.arbitration_id
 """
 
 
+DATA_SCIENCE_PROFILE_BY_SESSION_SQL = f"""
+CREATE OR REPLACE VIEW `{PROJECT_ID}.can_ids_gold.vw_can_id_profile_by_session` AS
+WITH dbc_ref AS (
+  SELECT
+    arbitration_id,
+    ANY_VALUE(message_name) AS message_name,
+    ANY_VALUE(signals_count) AS signals_count
+  FROM `{PROJECT_ID}.can_ids_silver.dbc_messages_reference`
+  GROUP BY arbitration_id
+)
+
+SELECT
+  m.session_id,
+  ANY_VALUE(m.source_file) AS source_file,
+
+  m.arbitration_id,
+
+  FORMAT('%03X', m.arbitration_id) AS aid_hex,
+
+  COALESCE(d.message_name, '[N/A]') AS message_name,
+
+  d.signals_count AS signals_count,
+
+  COUNT(*) AS messages_count,
+
+  COUNT(DISTINCT m.data) AS uniq_data_count,
+
+  AVG(
+    CASE
+      WHEN m.iat_us IS NOT NULL THEN m.iat_us / 1000000.0
+      ELSE NULL
+    END
+  ) AS interval_mean,
+
+  STDDEV_SAMP(
+    CASE
+      WHEN m.iat_us IS NOT NULL THEN m.iat_us / 1000000.0
+      ELSE NULL
+    END
+  ) AS interval_std,
+
+  ARRAY_AGG(DISTINCT m.dlc ORDER BY m.dlc) AS uniq_dlc
+
+FROM `{PROJECT_ID}.can_ids_silver.messages_with_iat` AS m
+
+LEFT JOIN dbc_ref AS d
+ON m.arbitration_id = d.arbitration_id
+
+GROUP BY
+  m.session_id,
+  m.arbitration_id,
+  d.message_name,
+  d.signals_count
+"""
+
+
+DS_DECODED_SIGNALS_VIEW_SQL = f"""
+CREATE OR REPLACE VIEW `{PROJECT_ID}.can_ids_gold.vw_ds_decoded_signals` AS
+SELECT
+  source_file,
+  session_id,
+  timestamp_us,
+  arbitration_id,
+  aid_hex,
+  dlc,
+  message_name,
+  signal_name,
+  signal_value,
+  signal_unit,
+  label,
+  decoded_at
+FROM `{PROJECT_ID}.can_ids_silver.messages_decoded_signals`
+"""
+
+
 def now_utc():
     return datetime.now(timezone.utc).isoformat()
 
 
 def log(message):
     print(f"[{now_utc()}] {message}", flush=True)
+
 
 
 def get_cluster_client():
@@ -130,7 +204,7 @@ def get_successfully_bronzed_files():
     """
 
     try:
-        rows = bq_client.query(query).result()
+        rows = bq_client.query(query, location=REGION).result()
         return {row.source_file for row in rows}
     except NotFound:
         return set()
@@ -146,13 +220,14 @@ def count_pending_or_failed_work():
       AND (
         COALESCE(silver_clean_status, 'PENDING') != 'SUCCESS'
         OR COALESCE(silver_iat_status, 'PENDING') != 'SUCCESS'
+        OR COALESCE(decoded_signals_status, 'PENDING') != 'SUCCESS'
         OR COALESCE(gold_window_status, 'PENDING') != 'SUCCESS'
         OR COALESCE(can_id_profile_status, 'PENDING') != 'SUCCESS'
       )
     """
 
     try:
-        rows = list(bq_client.query(query).result())
+        rows = list(bq_client.query(query, location=REGION).result())
         if not rows:
             return 0
         return int(rows[0].work_count)
@@ -322,7 +397,9 @@ def wait_for_job(job_id):
 
         if state in {"ERROR", "CANCELLED"}:
             details = job.status.details
-            raise RuntimeError(f"Dataproc job {job_id} failed with state={state}, details={details}")
+            raise RuntimeError(
+                f"Dataproc job {job_id} failed with state={state}, details={details}"
+            )
 
         time.sleep(30)
 
@@ -337,6 +414,7 @@ def submit_and_wait(step_label, script_uri, args):
     )
 
     log(f"Soumission job : {step_label}")
+
     submitted_job = job_client.submit_job(
         request={
             "project_id": PROJECT_ID,
@@ -346,6 +424,7 @@ def submit_and_wait(step_label, script_uri, args):
     )
 
     job_id = submitted_job.reference.job_id
+
     log(f"Job soumis : {step_label}, job_id={job_id}")
 
     wait_for_job(job_id)
@@ -360,11 +439,73 @@ def run_bigquery_query(name, query):
     log(f"BigQuery terminé : {name}")
 
 
+def bigquery_table_exists(table_id):
+    bq_client = bigquery.Client(project=PROJECT_ID)
+
+    try:
+        bq_client.get_table(table_id)
+        return True
+    except NotFound:
+        return False
+
+
+def create_bigquery_views():
+    gold_features_table = f"{PROJECT_ID}.can_ids_gold.gold_features_window"
+    can_id_profile_table = f"{PROJECT_ID}.can_ids_gold.can_id_profile"
+    silver_iat_table = f"{PROJECT_ID}.can_ids_silver.messages_with_iat"
+    dbc_reference_table = f"{PROJECT_ID}.can_ids_silver.dbc_messages_reference"
+    decoded_table = f"{PROJECT_ID}.can_ids_silver.messages_decoded_signals"
+
+    # Vue analyste Power BI
+    if (
+        bigquery_table_exists(gold_features_table)
+        and bigquery_table_exists(can_id_profile_table)
+    ):
+        run_bigquery_query(
+            name="create_analyst_view",
+            query=ANALYST_VIEW_SQL,
+        )
+    else:
+        log(
+            "Tables gold_features_window ou can_id_profile absentes. "
+            "Création de vw_gold_features_analyst ignorée."
+        )
+
+    # Vue Data Science profil par session
+    if (
+        bigquery_table_exists(silver_iat_table)
+        and bigquery_table_exists(dbc_reference_table)
+    ):
+        run_bigquery_query(
+            name="create_data_science_profile_by_session_view",
+            query=DATA_SCIENCE_PROFILE_BY_SESSION_SQL,
+        )
+    else:
+        log(
+            "Tables messages_with_iat ou dbc_messages_reference absentes. "
+            "Création de vw_can_id_profile_by_session ignorée."
+        )
+
+    # Vue Data Science signaux décodés
+    if bigquery_table_exists(decoded_table):
+        run_bigquery_query(
+            name="create_ds_decoded_signals_view",
+            query=DS_DECODED_SIGNALS_VIEW_SQL,
+        )
+    else:
+        log(
+            "Table messages_decoded_signals absente. "
+            "Création de vw_ds_decoded_signals ignorée."
+        )
+
+
 def run_pipeline():
     log("Démarrage orchestrateur CAN IDS.")
 
+
     if not has_work_to_do():
-        log("Aucun nouveau travail détecté. Arrêt sans créer de cluster.")
+        log("Aucun nouveau travail détecté. Création/mise à jour des vues BigQuery.")
+        create_bigquery_views()
         return
 
     cluster_created_or_used = False
@@ -412,6 +553,27 @@ def run_pipeline():
         )
 
         submit_and_wait(
+            step_label="silver-decode-signals-spark",
+            script_uri="gs://can-ids-data/spark_jobs/silver_decode_signals_spark.py",
+            args=[
+                "--project_id",
+                PROJECT_ID,
+                "--location",
+                REGION,
+                "--temp_bucket",
+                TEMP_BUCKET,
+                "--dbc_path",
+                DBC_URI,
+                "--input_table",
+                f"{PROJECT_ID}.can_ids_silver.messages_with_iat",
+                "--output_table",
+                f"{PROJECT_ID}.can_ids_silver.messages_decoded_signals",
+                "--status_table",
+                f"{PROJECT_ID}.can_ids_audit.file_processing_status",
+            ],
+        )
+
+        submit_and_wait(
             step_label="gold-features-window-spark",
             script_uri="gs://can-ids-data/spark_jobs/gold_features_window_spark.py",
             args=[
@@ -429,19 +591,9 @@ def run_pipeline():
             ],
         )
 
-        run_bigquery_query(
-            name="create_analyst_view",
-            query=ANALYST_VIEW_SQL,
-        )
+        create_bigquery_views()
 
-        submit_and_wait(
-            step_label="quality-reports-spark",
-            script_uri="gs://can-ids-data/spark_jobs/quality_reports_spark.py",
-            args=[
-                "--config_path",
-                CONFIG_URI,
-            ],
-        )
+
         submit_and_wait(
             step_label="gx-quality-spark",
             script_uri="gs://can-ids-data/spark_jobs/gx_quality_spark.py",

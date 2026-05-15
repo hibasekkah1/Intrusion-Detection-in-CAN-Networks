@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from google.cloud import storage
 from google.cloud import bigquery
+from google.api_core.exceptions import NotFound
 
 from pyspark.sql import SparkSession, Window
 from pyspark.sql.functions import (
@@ -136,11 +137,24 @@ def get_files_to_update(config):
 
 
 def delete_existing_iat_rows(config, session_ids):
+    """
+    Supprime les anciennes lignes IAT pour les sessions à retraiter.
+    Si la table messages_with_iat n'existe pas encore, on ignore le DELETE.
+    Cela évite l'erreur 404 lors du premier run après suppression des tables.
+    """
     if not session_ids:
         return
 
     project_id = config["gcp"]["project_id"]
     table_id = bigquery_table(config, "silver", "silver_iat")
+
+    client = bigquery.Client(project=project_id)
+
+    try:
+        client.get_table(table_id)
+    except NotFound:
+        print(f"Table {table_id} does not exist yet. Skipping delete.")
+        return
 
     query = f"""
     DELETE FROM `{table_id}`
@@ -149,12 +163,20 @@ def delete_existing_iat_rows(config, session_ids):
 
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
-            bigquery.ArrayQueryParameter("session_ids", "STRING", session_ids)
+            bigquery.ArrayQueryParameter(
+                "session_ids",
+                "STRING",
+                session_ids,
+            )
         ]
     )
 
-    client = bigquery.Client(project=project_id)
     client.query(query, job_config=job_config).result()
+
+    print(
+        f"Deleted existing rows from {table_id} "
+        f"for {len(session_ids)} sessions."
+    )
 
 
 def update_file_status_success(config, source_files, run_id):
@@ -168,6 +190,7 @@ def update_file_status_success(config, source_files, run_id):
     UPDATE `{table_id}`
     SET
       silver_iat_status = 'SUCCESS',
+      decoded_signals_status = COALESCE(decoded_signals_status, 'PENDING'),
       gold_window_status = 'PENDING',
       can_id_profile_status = 'PENDING',
       run_id = @run_id,
@@ -224,15 +247,15 @@ def create_messages_with_iat(messages_clean_df):
         .orderBy("timestamp_us")
     )
 
-    return (
+    messages_with_iat_df = (
         messages_clean_df
         .withColumn(
             "iat_us",
-            col("timestamp_us") - lag("timestamp_us").over(iat_window)
+            col("timestamp_us") - lag("timestamp_us").over(iat_window),
         )
         .withColumn(
             "seq_num",
-            row_number().over(iat_window)
+            row_number().over(iat_window),
         )
         .select(
             "message_id",
@@ -259,6 +282,8 @@ def create_messages_with_iat(messages_clean_df):
             "ingested_at",
         )
     )
+
+    return messages_with_iat_df
 
 
 def create_pipeline_run_df(
@@ -436,7 +461,12 @@ def run():
     except Exception as error:
         error_message = str(error)
 
-        update_file_status_failed(config, source_files, run_id, error_message)
+        update_file_status_failed(
+            config=config,
+            source_files=source_files,
+            run_id=run_id,
+            error_message=error_message,
+        )
 
         write_pipeline_run(
             spark=spark,

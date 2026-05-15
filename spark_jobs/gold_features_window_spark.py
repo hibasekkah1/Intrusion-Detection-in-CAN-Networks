@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from google.cloud import storage
 from google.cloud import bigquery
+from google.api_core.exceptions import NotFound
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
@@ -20,7 +21,7 @@ from pyspark.sql.functions import (
     floor,
     array,
     explode,
-    log,
+    log as spark_log,
     sum as spark_sum,
 )
 from pyspark.sql.types import (
@@ -137,6 +138,14 @@ def delete_existing_gold_rows(config, source_files):
     project_id = config["gcp"]["project_id"]
     table_id = bigquery_table(config, "gold", "gold_features_window")
 
+    client = bigquery.Client(project=project_id)
+
+    try:
+        client.get_table(table_id)
+    except NotFound:
+        print(f"Table {table_id} does not exist yet. Skipping delete.")
+        return
+
     query = f"""
     DELETE FROM `{table_id}`
     WHERE source_file IN UNNEST(@source_files)
@@ -148,8 +157,9 @@ def delete_existing_gold_rows(config, source_files):
         ]
     )
 
-    client = bigquery.Client(project=project_id)
     client.query(query, job_config=job_config).result()
+
+    print(f"Deleted existing rows from {table_id} for {len(source_files)} source files.")
 
 
 def update_file_status_success(config, source_files, run_id):
@@ -215,11 +225,12 @@ def add_window_columns(df):
         df
         .withColumn(
             "window_start_us",
-            floor(col("timestamp_us") / lit(WINDOW_SIZE_US)).cast("long") * lit(WINDOW_SIZE_US)
+            floor(col("timestamp_us") / lit(WINDOW_SIZE_US)).cast("long")
+            * lit(WINDOW_SIZE_US),
         )
         .withColumn(
             "window_end_us",
-            col("window_start_us") + lit(WINDOW_SIZE_US)
+            col("window_start_us") + lit(WINDOW_SIZE_US),
         )
     )
 
@@ -248,7 +259,7 @@ def create_entropy_df(windowed_df):
                     col("byte_6"),
                     col("byte_7"),
                 )
-            ).alias("payload_byte")
+            ).alias("payload_byte"),
         )
         .filter(col("payload_byte").isNotNull())
     )
@@ -275,7 +286,11 @@ def create_entropy_df(windowed_df):
         probabilities_df
         .groupBy(*keys)
         .agg(
-            (-spark_sum(col("p") * (log(col("p")) / log(lit(2.0))))).alias("entropy_bits")
+            (
+                -spark_sum(
+                    col("p") * (spark_log(col("p")) / spark_log(lit(2.0)))
+                )
+            ).alias("entropy_bits")
         )
     )
 
@@ -309,12 +324,14 @@ def create_gold_features_window(messages_with_iat_df):
         )
         .withColumn(
             "iat_cv",
-            when(col("iat_mean_us").isNull() | (col("iat_mean_us") == 0), None)
-            .otherwise(col("iat_std_us") / col("iat_mean_us"))
+            when(
+                col("iat_mean_us").isNull() | (col("iat_mean_us") == 0),
+                None,
+            ).otherwise(col("iat_std_us") / col("iat_mean_us")),
         )
         .withColumn(
             "msg_per_sec",
-            col("msg_count") / lit(WINDOW_SIZE_US / 1_000_000.0)
+            col("msg_count") / lit(WINDOW_SIZE_US / 1_000_000.0),
         )
     )
 
@@ -493,6 +510,32 @@ def run():
 
         input_rows = messages_with_iat_df.count()
 
+        if input_rows == 0:
+            error_message = "Aucune ligne Silver IAT trouvée pour les fichiers à traiter."
+
+            update_file_status_failed(
+                config=config,
+                source_files=source_files,
+                run_id=run_id,
+                error_message=error_message,
+            )
+
+            write_pipeline_run(
+                spark=spark,
+                config=config,
+                run_id=run_id,
+                step_name=step_name,
+                status="FAILED",
+                started_at=started_at,
+                input_rows=0,
+                output_rows=0,
+                files_processed=len(source_files),
+                error_message=error_message,
+            )
+
+            print(error_message)
+            return
+
         gold_features_df = create_gold_features_window(messages_with_iat_df)
 
         output_rows = gold_features_df.count()
@@ -531,7 +574,12 @@ def run():
     except Exception as error:
         error_message = str(error)
 
-        update_file_status_failed(config, source_files, run_id, error_message)
+        update_file_status_failed(
+            config=config,
+            source_files=source_files,
+            run_id=run_id,
+            error_message=error_message,
+        )
 
         write_pipeline_run(
             spark=spark,

@@ -301,6 +301,12 @@ def delete_source_files_from_table(config, dataset_key, table_key, source_files)
 
     client = bigquery.Client(project=project_id)
 
+    try:
+        client.get_table(table_id)
+    except NotFound:
+        print(f"Table {table_id} does not exist yet. Skipping delete.")
+        return
+
     query = f"""
     DELETE FROM `{table_id}`
     WHERE source_file IN UNNEST(@source_files)
@@ -313,6 +319,8 @@ def delete_source_files_from_table(config, dataset_key, table_key, source_files)
     )
 
     client.query(query, job_config=job_config).result()
+
+    print(f"Deleted existing rows from {table_id} for {len(source_files)} source files.")
 
 
 def create_file_status_df(spark, raw_df, run_id):

@@ -86,11 +86,20 @@ def write_to_bigquery(df, config, dataset_key, table_key, mode="overwrite"):
 
 
 def prepare_dbc_file(spark, dbc_path):
+    """
+    Ajoute le fichier DBC au contexte Spark.
+    Le fichier sera disponible localement via SparkFiles.get().
+    """
     spark.sparkContext.addFile(dbc_path)
     return os.path.basename(dbc_path)
 
 
 def create_dbc_reference_df(spark, dbc_file_name):
+    """
+    Crée une table de référence DBC :
+    1 ligne = 1 message DBC / arbitration_id.
+    """
+
     dbc_local_path = SparkFiles.get(dbc_file_name)
 
     db = cantools.database.load_file(dbc_local_path)
@@ -108,20 +117,22 @@ def create_dbc_reference_df(spark, dbc_file_name):
                 int(message.frame_id),
                 f"0x{int(message.frame_id):03X}",
                 message.name,
-                len(signal_names_list),
+                int(len(signal_names_list)),
                 signal_names,
                 computed_at,
             )
         )
 
-    schema = StructType([
-        StructField("arbitration_id", LongType(), True),
-        StructField("aid_hex", StringType(), True),
-        StructField("message_name", StringType(), True),
-        StructField("signals_count", LongType(), True),
-        StructField("signal_names", StringType(), True),
-        StructField("computed_at", TimestampType(), True),
-    ])
+    schema = StructType(
+        [
+            StructField("arbitration_id", LongType(), True),
+            StructField("aid_hex", StringType(), True),
+            StructField("message_name", StringType(), True),
+            StructField("signals_count", LongType(), True),
+            StructField("signal_names", StringType(), True),
+            StructField("computed_at", TimestampType(), True),
+        ]
+    )
 
     return spark.createDataFrame(rows, schema)
 
@@ -139,43 +150,47 @@ def create_pipeline_run_df(
     finished_at = datetime.now(timezone.utc)
     duration_seconds = (finished_at - started_at).total_seconds()
 
-    schema = StructType([
-        StructField("run_id", StringType(), True),
-        StructField("pipeline_name", StringType(), True),
-        StructField("step_name", StringType(), True),
-        StructField("status", StringType(), True),
-        StructField("started_at", TimestampType(), True),
-        StructField("finished_at", TimestampType(), True),
-        StructField("duration_seconds", DoubleType(), True),
-        StructField("input_rows", LongType(), True),
-        StructField("output_rows", LongType(), True),
-        StructField("rejected_rows", LongType(), True),
-        StructField("files_processed", LongType(), True),
-        StructField("files_skipped", LongType(), True),
-        StructField("source_layer", StringType(), True),
-        StructField("target_layer", StringType(), True),
-        StructField("error_message", StringType(), True),
-        StructField("created_at", TimestampType(), True),
-    ])
+    schema = StructType(
+        [
+            StructField("run_id", StringType(), True),
+            StructField("pipeline_name", StringType(), True),
+            StructField("step_name", StringType(), True),
+            StructField("status", StringType(), True),
+            StructField("started_at", TimestampType(), True),
+            StructField("finished_at", TimestampType(), True),
+            StructField("duration_seconds", DoubleType(), True),
+            StructField("input_rows", LongType(), True),
+            StructField("output_rows", LongType(), True),
+            StructField("rejected_rows", LongType(), True),
+            StructField("files_processed", LongType(), True),
+            StructField("files_skipped", LongType(), True),
+            StructField("source_layer", StringType(), True),
+            StructField("target_layer", StringType(), True),
+            StructField("error_message", StringType(), True),
+            StructField("created_at", TimestampType(), True),
+        ]
+    )
 
-    data = [(
-        run_id,
-        "can_ids_full_cloud_pipeline",
-        step_name,
-        status,
-        started_at,
-        finished_at,
-        float(duration_seconds),
-        input_rows,
-        output_rows,
-        0,
-        1,
-        0,
-        "DBC file",
-        "Silver.dbc_messages_reference",
-        error_message,
-        datetime.now(timezone.utc),
-    )]
+    data = [
+        (
+            run_id,
+            "can_ids_full_cloud_pipeline",
+            step_name,
+            status,
+            started_at,
+            finished_at,
+            float(duration_seconds),
+            input_rows,
+            output_rows,
+            0,
+            1,
+            0,
+            "DBC file",
+            "Silver.dbc_messages_reference",
+            error_message,
+            datetime.now(timezone.utc),
+        )
+    ]
 
     return spark.createDataFrame(data, schema)
 
@@ -225,7 +240,10 @@ def run():
     output_rows = 0
 
     try:
-        dbc_file_name = prepare_dbc_file(spark, args.dbc_path)
+        dbc_file_name = prepare_dbc_file(
+            spark=spark,
+            dbc_path=args.dbc_path,
+        )
 
         dbc_reference_df = create_dbc_reference_df(
             spark=spark,
@@ -260,17 +278,20 @@ def run():
     except Exception as error:
         error_message = str(error)
 
-        write_pipeline_run(
-            spark=spark,
-            config=config,
-            run_id=run_id,
-            step_name=step_name,
-            status="FAILED",
-            started_at=started_at,
-            input_rows=input_rows,
-            output_rows=output_rows,
-            error_message=error_message,
-        )
+        try:
+            write_pipeline_run(
+                spark=spark,
+                config=config,
+                run_id=run_id,
+                step_name=step_name,
+                status="FAILED",
+                started_at=started_at,
+                input_rows=input_rows,
+                output_rows=output_rows,
+                error_message=error_message,
+            )
+        except Exception as audit_error:
+            print(f"Erreur lors de l'écriture audit pipeline_runs : {audit_error}")
 
         raise
 

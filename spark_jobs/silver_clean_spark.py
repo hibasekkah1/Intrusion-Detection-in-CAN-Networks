@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from google.cloud import storage
 from google.cloud import bigquery
+from google.api_core.exceptions import NotFound
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
@@ -122,11 +123,24 @@ def get_files_to_process(config):
 
 
 def delete_existing_silver_rows(config, source_files):
+    """
+    Supprime les anciennes lignes Silver pour les fichiers à retraiter.
+    Si la table Silver n'existe pas encore, on ignore le DELETE.
+    Cela permet de repartir de zéro sans erreur 404.
+    """
     if not source_files:
         return
 
     project_id = config["gcp"]["project_id"]
     table_id = bigquery_table(config, "silver", "silver_clean")
+
+    client = bigquery.Client(project=project_id)
+
+    try:
+        client.get_table(table_id)
+    except NotFound:
+        print(f"Table {table_id} does not exist yet. Skipping delete.")
+        return
 
     query = f"""
     DELETE FROM `{table_id}`
@@ -135,12 +149,20 @@ def delete_existing_silver_rows(config, source_files):
 
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
-            bigquery.ArrayQueryParameter("source_files", "STRING", source_files)
+            bigquery.ArrayQueryParameter(
+                "source_files",
+                "STRING",
+                source_files,
+            )
         ]
     )
 
-    client = bigquery.Client(project=project_id)
     client.query(query, job_config=job_config).result()
+
+    print(
+        f"Deleted existing rows from {table_id} "
+        f"for {len(source_files)} source files."
+    )
 
 
 def update_file_status_success(config, source_files, run_id):
@@ -155,6 +177,7 @@ def update_file_status_success(config, source_files, run_id):
     SET
       silver_clean_status = 'SUCCESS',
       silver_iat_status = 'PENDING',
+      decoded_signals_status = COALESCE(decoded_signals_status, 'PENDING'),
       gold_window_status = 'PENDING',
       can_id_profile_status = 'PENDING',
       run_id = @run_id,
@@ -267,15 +290,17 @@ def extract_payload_bytes(df):
 
 
 def create_messages_clean(bronze_df):
-    deduplicated_df = bronze_df.dropDuplicates([
-        "session_id",
-        "timestamp_us",
-        "arbitration_id",
-        "dlc",
-        "data",
-        "label",
-        "source_file",
-    ])
+    deduplicated_df = bronze_df.dropDuplicates(
+        [
+            "session_id",
+            "timestamp_us",
+            "arbitration_id",
+            "dlc",
+            "data",
+            "label",
+            "source_file",
+        ]
+    )
 
     enriched_df = (
         deduplicated_df
@@ -287,7 +312,6 @@ def create_messages_clean(bronze_df):
         .filter(col("label").isNotNull())
         .filter(col("data").isNotNull())
 
-        # Conversion importante :
         # Bronze contient des timestamps en nanosecondes.
         # Silver standardise en microsecondes.
         .withColumn("timestamp_us", (col("timestamp_us") / lit(1000)).cast("long"))
@@ -370,43 +394,47 @@ def create_pipeline_run_df(
     finished_at = datetime.now(timezone.utc)
     duration_seconds = (finished_at - started_at).total_seconds()
 
-    schema = StructType([
-        StructField("run_id", StringType(), True),
-        StructField("pipeline_name", StringType(), True),
-        StructField("step_name", StringType(), True),
-        StructField("status", StringType(), True),
-        StructField("started_at", TimestampType(), True),
-        StructField("finished_at", TimestampType(), True),
-        StructField("duration_seconds", DoubleType(), True),
-        StructField("input_rows", LongType(), True),
-        StructField("output_rows", LongType(), True),
-        StructField("rejected_rows", LongType(), True),
-        StructField("files_processed", LongType(), True),
-        StructField("files_skipped", LongType(), True),
-        StructField("source_layer", StringType(), True),
-        StructField("target_layer", StringType(), True),
-        StructField("error_message", StringType(), True),
-        StructField("created_at", TimestampType(), True),
-    ])
+    schema = StructType(
+        [
+            StructField("run_id", StringType(), True),
+            StructField("pipeline_name", StringType(), True),
+            StructField("step_name", StringType(), True),
+            StructField("status", StringType(), True),
+            StructField("started_at", TimestampType(), True),
+            StructField("finished_at", TimestampType(), True),
+            StructField("duration_seconds", DoubleType(), True),
+            StructField("input_rows", LongType(), True),
+            StructField("output_rows", LongType(), True),
+            StructField("rejected_rows", LongType(), True),
+            StructField("files_processed", LongType(), True),
+            StructField("files_skipped", LongType(), True),
+            StructField("source_layer", StringType(), True),
+            StructField("target_layer", StringType(), True),
+            StructField("error_message", StringType(), True),
+            StructField("created_at", TimestampType(), True),
+        ]
+    )
 
-    data = [(
-        run_id,
-        "can_ids_full_cloud_pipeline",
-        step_name,
-        status,
-        started_at,
-        finished_at,
-        duration_seconds,
-        input_rows,
-        output_rows,
-        0,
-        files_processed,
-        0,
-        "Bronze.messages_raw",
-        "Silver.messages_clean",
-        error_message,
-        datetime.now(timezone.utc),
-    )]
+    data = [
+        (
+            run_id,
+            "can_ids_full_cloud_pipeline",
+            step_name,
+            status,
+            started_at,
+            finished_at,
+            duration_seconds,
+            input_rows,
+            output_rows,
+            0,
+            files_processed,
+            0,
+            "Bronze.messages_raw",
+            "Silver.messages_clean",
+            error_message,
+            datetime.now(timezone.utc),
+        )
+    ]
 
     return spark.createDataFrame(data, schema)
 

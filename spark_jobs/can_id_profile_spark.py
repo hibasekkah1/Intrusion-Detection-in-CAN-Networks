@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from google.cloud import storage
 from google.cloud import bigquery
+from google.api_core.exceptions import NotFound
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
@@ -109,6 +110,19 @@ def write_to_bigquery(df, config, dataset_key, table_key, mode="overwrite"):
     )
 
 
+def table_exists(config, dataset_key, table_key):
+    project_id = config["gcp"]["project_id"]
+    table_id = bigquery_table(config, dataset_key, table_key)
+
+    client = bigquery.Client(project=project_id)
+
+    try:
+        client.get_table(table_id)
+        return True
+    except NotFound:
+        return False
+
+
 def update_can_id_profile_status_success(config, run_id):
     project_id = config["gcp"]["project_id"]
     table_id = bigquery_table(config, "audit", "file_processing_status")
@@ -159,6 +173,16 @@ def update_can_id_profile_status_failed(config, run_id, error_message):
 
 
 def create_can_id_profile(messages_with_iat_df, dbc_reference_df):
+    """
+    Crée le profil global par CAN ID.
+
+    Granularité :
+    1 ligne = 1 arbitration_id
+
+    Cette table est utilisée pour enrichir les vues Gold / Power BI
+    avec les noms DBC, le nombre de signaux et les statistiques globales.
+    """
+
     can_stats_df = (
         messages_with_iat_df
         .groupBy("arbitration_id")
@@ -178,14 +202,15 @@ def create_can_id_profile(messages_with_iat_df, dbc_reference_df):
         .drop("interval_mean_us", "interval_std_us")
     )
 
+    # Déduplication DBC pour éviter de multiplier les lignes lors du join.
     dbc_df = (
         dbc_reference_df
-        .select(
-            "arbitration_id",
-            col("aid_hex").alias("aid_hex_from_dbc"),
-            "message_name",
-            "signals_count",
-            "signal_names",
+        .groupBy("arbitration_id")
+        .agg(
+            first("aid_hex", ignorenulls=True).alias("aid_hex_from_dbc"),
+            first("message_name", ignorenulls=True).alias("message_name"),
+            first("signals_count", ignorenulls=True).alias("signals_count"),
+            first("signal_names", ignorenulls=True).alias("signal_names"),
         )
     )
 
@@ -333,6 +358,36 @@ def run():
     output_rows = 0
 
     try:
+        if not table_exists(config, "silver", "silver_iat"):
+            print("Table Silver IAT absente. Aucun profil CAN ID à générer.")
+            write_pipeline_run(
+                spark=spark,
+                config=config,
+                run_id=run_id,
+                step_name=step_name,
+                status="SUCCESS",
+                started_at=started_at,
+                input_rows=0,
+                output_rows=0,
+                error_message=None,
+            )
+            return
+
+        if not table_exists(config, "silver", "dbc_messages_reference"):
+            print("Table DBC reference absente. Aucun profil CAN ID à générer.")
+            write_pipeline_run(
+                spark=spark,
+                config=config,
+                run_id=run_id,
+                step_name=step_name,
+                status="SUCCESS",
+                started_at=started_at,
+                input_rows=0,
+                output_rows=0,
+                error_message=None,
+            )
+            return
+
         messages_with_iat_df = read_from_bigquery(
             spark=spark,
             config=config,
@@ -348,6 +403,21 @@ def run():
         )
 
         input_rows = messages_with_iat_df.count()
+
+        if input_rows == 0:
+            print("Aucune ligne dans Silver IAT. Aucun profil CAN ID à générer.")
+            write_pipeline_run(
+                spark=spark,
+                config=config,
+                run_id=run_id,
+                step_name=step_name,
+                status="SUCCESS",
+                started_at=started_at,
+                input_rows=0,
+                output_rows=0,
+                error_message=None,
+            )
+            return
 
         can_id_profile_df = create_can_id_profile(
             messages_with_iat_df=messages_with_iat_df,

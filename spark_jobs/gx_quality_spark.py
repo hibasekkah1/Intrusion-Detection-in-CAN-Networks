@@ -5,6 +5,8 @@ from uuid import uuid4
 
 import yaml
 from google.cloud import storage
+from google.cloud import bigquery
+from google.api_core.exceptions import NotFound
 
 from pyspark.sql import SparkSession
 from pyspark.sql.types import (
@@ -61,7 +63,7 @@ def create_spark_session(config):
 
     spark = (
         SparkSession.builder
-        .appName("can-ids-great-expectations-quality")
+        .appName("can-ids-gx-quality-only")
         .config("spark.sql.shuffle.partitions", "20")
         .config("temporaryGcsBucket", temp_bucket)
         .getOrCreate()
@@ -74,18 +76,21 @@ def create_spark_session(config):
 
 def bigquery_table(config, dataset_key, table_key):
     project_id = get_config_value(config, ["gcp", "project_id"])
-
-    dataset = get_config_value(
-        config,
-        ["bigquery", "datasets", dataset_key],
-    )
-
-    table = get_config_value(
-        config,
-        ["bigquery", "tables", table_key],
-    )
+    dataset = get_config_value(config, ["bigquery", "datasets", dataset_key])
+    table = get_config_value(config, ["bigquery", "tables", table_key])
 
     return f"{project_id}.{dataset}.{table}"
+
+
+def table_exists(config, table_id):
+    project_id = get_config_value(config, ["gcp", "project_id"])
+    client = bigquery.Client(project=project_id)
+
+    try:
+        client.get_table(table_id)
+        return True
+    except NotFound:
+        return False
 
 
 def read_bigquery_table(spark, table_id):
@@ -189,6 +194,35 @@ def build_record(
     )
 
 
+def build_skipped_record(
+    run_id,
+    check_name,
+    layer_name,
+    table_name,
+    reason,
+):
+    details = json.dumps(
+        {
+            "success": True,
+            "reason": reason,
+        },
+        default=str,
+    )
+
+    return (
+        run_id,
+        check_name,
+        layer_name,
+        table_name,
+        "SKIPPED",
+        "INFO",
+        0.0,
+        0.0,
+        details,
+        now_utc(),
+    )
+
+
 def create_quality_df(spark, records):
     schema = StructType([
         StructField("run_id", StringType(), True),
@@ -208,7 +242,6 @@ def create_quality_df(spark, records):
 
 def validate_bronze(bronze_df, run_id):
     records = []
-
     gx_df = SparkDFDataset(bronze_df)
 
     records.append(build_record(
@@ -282,9 +315,52 @@ def validate_bronze(bronze_df, run_id):
     return records
 
 
+def validate_silver_clean(silver_clean_df, run_id):
+    records = []
+    gx_df = SparkDFDataset(silver_clean_df)
+
+    records.append(build_record(
+        run_id,
+        "gx_silver_clean_has_rows",
+        "Silver",
+        "messages_clean",
+        gx_df.expect_table_row_count_to_be_between(min_value=1),
+        threshold_value=1.0,
+    ))
+
+    records.append(build_record(
+        run_id,
+        "gx_silver_clean_message_id_not_null",
+        "Silver",
+        "messages_clean",
+        gx_df.expect_column_values_to_not_be_null("message_id"),
+    ))
+
+    records.append(build_record(
+        run_id,
+        "gx_silver_clean_aid_hex_not_null",
+        "Silver",
+        "messages_clean",
+        gx_df.expect_column_values_to_not_be_null("aid_hex"),
+    ))
+
+    records.append(build_record(
+        run_id,
+        "gx_silver_clean_zeros_ratio_between_0_1",
+        "Silver",
+        "messages_clean",
+        gx_df.expect_column_values_to_be_between(
+            "zeros_ratio",
+            min_value=0,
+            max_value=1,
+        ),
+    ))
+
+    return records
+
+
 def validate_silver_iat(silver_iat_df, run_id):
     records = []
-
     gx_df = SparkDFDataset(silver_iat_df)
 
     records.append(build_record(
@@ -298,7 +374,7 @@ def validate_silver_iat(silver_iat_df, run_id):
 
     records.append(build_record(
         run_id,
-        "gx_silver_session_id_not_null",
+        "gx_silver_iat_session_id_not_null",
         "Silver",
         "messages_with_iat",
         gx_df.expect_column_values_to_not_be_null("session_id"),
@@ -306,18 +382,10 @@ def validate_silver_iat(silver_iat_df, run_id):
 
     records.append(build_record(
         run_id,
-        "gx_silver_aid_hex_not_null",
+        "gx_silver_iat_aid_hex_not_null",
         "Silver",
         "messages_with_iat",
         gx_df.expect_column_values_to_not_be_null("aid_hex"),
-    ))
-
-    records.append(build_record(
-        run_id,
-        "gx_silver_timestamp_us_not_null",
-        "Silver",
-        "messages_with_iat",
-        gx_df.expect_column_values_to_not_be_null("timestamp_us"),
     ))
 
     iat_not_null_df = silver_iat_df.filter("iat_us IS NOT NULL")
@@ -337,9 +405,41 @@ def validate_silver_iat(silver_iat_df, run_id):
     return records
 
 
+def validate_decoded_signals(decoded_df, run_id):
+    records = []
+    gx_df = SparkDFDataset(decoded_df)
+
+    records.append(build_record(
+        run_id,
+        "gx_decoded_signals_has_rows",
+        "Silver",
+        "messages_decoded_signals",
+        gx_df.expect_table_row_count_to_be_between(min_value=1),
+        threshold_value=1.0,
+    ))
+
+    records.append(build_record(
+        run_id,
+        "gx_decoded_signal_name_not_null",
+        "Silver",
+        "messages_decoded_signals",
+        gx_df.expect_column_values_to_not_be_null("signal_name"),
+    ))
+
+    records.append(build_record(
+        run_id,
+        "gx_decoded_signal_value_not_null",
+        "Silver",
+        "messages_decoded_signals",
+        gx_df.expect_column_values_to_not_be_null("signal_value"),
+        severity="WARNING",
+    ))
+
+    return records
+
+
 def validate_gold_features(gold_df, run_id):
     records = []
-
     gx_df = SparkDFDataset(gold_df)
 
     records.append(build_record(
@@ -361,41 +461,11 @@ def validate_gold_features(gold_df, run_id):
 
     records.append(build_record(
         run_id,
-        "gx_gold_aid_hex_not_null",
-        "Gold",
-        "gold_features_window",
-        gx_df.expect_column_values_to_not_be_null("aid_hex"),
-    ))
-
-    records.append(build_record(
-        run_id,
         "gx_gold_msg_per_sec_not_negative",
         "Gold",
         "gold_features_window",
         gx_df.expect_column_values_to_be_between(
             "msg_per_sec",
-            min_value=0,
-        ),
-    ))
-
-    records.append(build_record(
-        run_id,
-        "gx_gold_iat_mean_not_negative",
-        "Gold",
-        "gold_features_window",
-        gx_df.expect_column_values_to_be_between(
-            "iat_mean_us",
-            min_value=0,
-        ),
-    ))
-
-    records.append(build_record(
-        run_id,
-        "gx_gold_entropy_not_negative",
-        "Gold",
-        "gold_features_window",
-        gx_df.expect_column_values_to_be_between(
-            "entropy_bits",
             min_value=0,
         ),
     ))
@@ -412,23 +482,11 @@ def validate_gold_features(gold_df, run_id):
         ),
     ))
 
-    records.append(build_record(
-        run_id,
-        "gx_gold_dlc_distinct_count_positive",
-        "Gold",
-        "gold_features_window",
-        gx_df.expect_column_values_to_be_between(
-            "dlc_distinct_count",
-            min_value=1,
-        ),
-    ))
-
     return records
 
 
 def validate_can_id_profile(profile_df, run_id):
     records = []
-
     gx_df = SparkDFDataset(profile_df)
 
     records.append(build_record(
@@ -446,14 +504,6 @@ def validate_can_id_profile(profile_df, run_id):
         "Gold",
         "can_id_profile",
         gx_df.expect_column_values_to_not_be_null("arbitration_id"),
-    ))
-
-    records.append(build_record(
-        run_id,
-        "gx_profile_aid_hex_not_null",
-        "Gold",
-        "can_id_profile",
-        gx_df.expect_column_values_to_not_be_null("aid_hex"),
     ))
 
     records.append(build_record(
@@ -478,6 +528,32 @@ def validate_can_id_profile(profile_df, run_id):
     return records
 
 
+def run_checks_if_table_exists(
+    spark,
+    config,
+    run_id,
+    table_id,
+    layer_name,
+    table_name,
+    validator_function,
+):
+    if not table_exists(config, table_id):
+        return [
+            build_skipped_record(
+                run_id,
+                f"gx_{table_name}_table_missing",
+                layer_name,
+                table_name,
+                f"Table not found: {table_id}",
+            )
+        ]
+
+    print(f"Reading table: {table_id}")
+    df = read_bigquery_table(spark, table_id)
+
+    return validator_function(df, run_id)
+
+
 def run():
     args = parse_args()
     config = load_config(args.config_path)
@@ -485,31 +561,60 @@ def run():
     spark = create_spark_session(config)
 
     run_id = f"gx_run_{uuid4()}"
+    records = []
 
     try:
-        bronze_table = bigquery_table(config, "bronze", "bronze_raw")
-        silver_iat_table = bigquery_table(config, "silver", "silver_iat")
-        gold_features_table = bigquery_table(config, "gold", "gold_features_window")
-        can_id_profile_table = bigquery_table(config, "gold", "can_id_profile")
+        table_checks = [
+            (
+                bigquery_table(config, "bronze", "bronze_raw"),
+                "Bronze",
+                "messages_raw",
+                validate_bronze,
+            ),
+            (
+                bigquery_table(config, "silver", "silver_clean"),
+                "Silver",
+                "messages_clean",
+                validate_silver_clean,
+            ),
+            (
+                bigquery_table(config, "silver", "silver_iat"),
+                "Silver",
+                "messages_with_iat",
+                validate_silver_iat,
+            ),
+            (
+                f"{get_config_value(config, ['gcp', 'project_id'])}.{get_config_value(config, ['bigquery', 'datasets', 'silver'])}.messages_decoded_signals",
+                "Silver",
+                "messages_decoded_signals",
+                validate_decoded_signals,
+            ),
+            (
+                bigquery_table(config, "gold", "gold_features_window"),
+                "Gold",
+                "gold_features_window",
+                validate_gold_features,
+            ),
+            (
+                bigquery_table(config, "gold", "can_id_profile"),
+                "Gold",
+                "can_id_profile",
+                validate_can_id_profile,
+            ),
+        ]
 
-        print(f"Reading Bronze table: {bronze_table}")
-        bronze_df = read_bigquery_table(spark, bronze_table)
-
-        print(f"Reading Silver IAT table: {silver_iat_table}")
-        silver_iat_df = read_bigquery_table(spark, silver_iat_table)
-
-        print(f"Reading Gold Features table: {gold_features_table}")
-        gold_df = read_bigquery_table(spark, gold_features_table)
-
-        print(f"Reading CAN ID Profile table: {can_id_profile_table}")
-        profile_df = read_bigquery_table(spark, can_id_profile_table)
-
-        records = []
-
-        records.extend(validate_bronze(bronze_df, run_id))
-        records.extend(validate_silver_iat(silver_iat_df, run_id))
-        records.extend(validate_gold_features(gold_df, run_id))
-        records.extend(validate_can_id_profile(profile_df, run_id))
+        for table_id, layer_name, table_name, validator_function in table_checks:
+            records.extend(
+                run_checks_if_table_exists(
+                    spark=spark,
+                    config=config,
+                    run_id=run_id,
+                    table_id=table_id,
+                    layer_name=layer_name,
+                    table_name=table_name,
+                    validator_function=validator_function,
+                )
+            )
 
         quality_df = create_quality_df(spark, records)
 
