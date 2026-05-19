@@ -134,6 +134,42 @@ def get_already_ingested_files(config):
     except NotFound:
         return set()
 
+def ensure_table_exists(config, dataset_key, table_key):
+    project_id = config["gcp"]["project_id"]
+    table_id = bigquery_table(config, dataset_key, table_key)
+
+    client = bigquery.Client(project=project_id)
+
+    try:
+        client.get_table(table_id)
+    except NotFound:
+        print(f"Création de la table {table_id}")
+
+        if table_key == "bronze_raw":
+            schema = [
+                bigquery.SchemaField("session_id", "STRING"),
+                bigquery.SchemaField("timestamp_us", "INTEGER"),
+                bigquery.SchemaField("arbitration_id", "INTEGER"),
+                bigquery.SchemaField("dlc", "INTEGER"),
+                bigquery.SchemaField("data", "BYTES"),
+                bigquery.SchemaField("label", "INTEGER"),
+                bigquery.SchemaField("source_file", "STRING"),
+                bigquery.SchemaField("ingested_at", "TIMESTAMP"),
+            ]
+        else:  # messages_rejected
+            schema = [
+                bigquery.SchemaField("session_id", "STRING"),
+                bigquery.SchemaField("timestamp_us", "INTEGER"),
+                bigquery.SchemaField("arbitration_id", "INTEGER"),
+                bigquery.SchemaField("dlc", "INTEGER"),
+                bigquery.SchemaField("data", "BYTES"),
+                bigquery.SchemaField("label", "INTEGER"),
+                bigquery.SchemaField("source_file", "STRING"),
+                bigquery.SchemaField("rejection_reason", "STRING"),
+                bigquery.SchemaField("rejected_at", "TIMESTAMP"),
+            ]
+
+        client.create_table(bigquery.Table(table_id, schema=schema)) 
 
 def get_new_files(config):
     raw_files = list_raw_parquet_files(config)
@@ -577,6 +613,9 @@ def run():
 
         output_rows = valid_df.count()
         rejected_rows = rejected_df.count()
+
+        ensure_table_exists(config, "bronze", "bronze_raw")
+        ensure_table_exists(config, "bronze", "bronze_rejected") 
 
         # Sécurité idempotence :
         # si un ancien run a écrit partiellement ces fichiers, on nettoie avant append.

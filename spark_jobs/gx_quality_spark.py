@@ -405,37 +405,6 @@ def validate_silver_iat(silver_iat_df, run_id):
     return records
 
 
-def validate_decoded_signals(decoded_df, run_id):
-    records = []
-    gx_df = SparkDFDataset(decoded_df)
-
-    records.append(build_record(
-        run_id,
-        "gx_decoded_signals_has_rows",
-        "Silver",
-        "messages_decoded_signals",
-        gx_df.expect_table_row_count_to_be_between(min_value=1),
-        threshold_value=1.0,
-    ))
-
-    records.append(build_record(
-        run_id,
-        "gx_decoded_signal_name_not_null",
-        "Silver",
-        "messages_decoded_signals",
-        gx_df.expect_column_values_to_not_be_null("signal_name"),
-    ))
-
-    records.append(build_record(
-        run_id,
-        "gx_decoded_signal_value_not_null",
-        "Silver",
-        "messages_decoded_signals",
-        gx_df.expect_column_values_to_not_be_null("signal_value"),
-        severity="WARNING",
-    ))
-
-    return records
 
 
 def validate_gold_features(gold_df, run_id):
@@ -582,12 +551,6 @@ def run():
                 "Silver",
                 "messages_with_iat",
                 validate_silver_iat,
-            ),
-            (
-                f"{get_config_value(config, ['gcp', 'project_id'])}.{get_config_value(config, ['bigquery', 'datasets', 'silver'])}.messages_decoded_signals",
-                "Silver",
-                "messages_decoded_signals",
-                validate_decoded_signals,
             ),
             (
                 bigquery_table(config, "gold", "gold_features_window"),

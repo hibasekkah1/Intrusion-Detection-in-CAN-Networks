@@ -125,24 +125,6 @@ GROUP BY
 """
 
 
-DS_DECODED_SIGNALS_VIEW_SQL = f"""
-CREATE OR REPLACE VIEW `{PROJECT_ID}.can_ids_gold.vw_ds_decoded_signals` AS
-SELECT
-  source_file,
-  session_id,
-  timestamp_us,
-  arbitration_id,
-  aid_hex,
-  dlc,
-  message_name,
-  signal_name,
-  signal_value,
-  signal_unit,
-  label,
-  decoded_at
-FROM `{PROJECT_ID}.can_ids_silver.messages_decoded_signals`
-"""
-
 
 def now_utc():
     return datetime.now(timezone.utc).isoformat()
@@ -220,7 +202,6 @@ def count_pending_or_failed_work():
       AND (
         COALESCE(silver_clean_status, 'PENDING') != 'SUCCESS'
         OR COALESCE(silver_iat_status, 'PENDING') != 'SUCCESS'
-        OR COALESCE(decoded_signals_status, 'PENDING') != 'SUCCESS'
         OR COALESCE(gold_window_status, 'PENDING') != 'SUCCESS'
         OR COALESCE(can_id_profile_status, 'PENDING') != 'SUCCESS'
       )
@@ -454,7 +435,6 @@ def create_bigquery_views():
     can_id_profile_table = f"{PROJECT_ID}.can_ids_gold.can_id_profile"
     silver_iat_table = f"{PROJECT_ID}.can_ids_silver.messages_with_iat"
     dbc_reference_table = f"{PROJECT_ID}.can_ids_silver.dbc_messages_reference"
-    decoded_table = f"{PROJECT_ID}.can_ids_silver.messages_decoded_signals"
 
     # Vue analyste Power BI
     if (
@@ -486,17 +466,6 @@ def create_bigquery_views():
             "Création de vw_can_id_profile_by_session ignorée."
         )
 
-    # Vue Data Science signaux décodés
-    if bigquery_table_exists(decoded_table):
-        run_bigquery_query(
-            name="create_ds_decoded_signals_view",
-            query=DS_DECODED_SIGNALS_VIEW_SQL,
-        )
-    else:
-        log(
-            "Table messages_decoded_signals absente. "
-            "Création de vw_ds_decoded_signals ignorée."
-        )
 
 
 def run_pipeline():
@@ -549,27 +518,6 @@ def run_pipeline():
                 CONFIG_URI,
                 "--dbc_path",
                 DBC_URI,
-            ],
-        )
-
-        submit_and_wait(
-            step_label="silver-decode-signals-spark",
-            script_uri="gs://can-ids-data/spark_jobs/silver_decode_signals_spark.py",
-            args=[
-                "--project_id",
-                PROJECT_ID,
-                "--location",
-                REGION,
-                "--temp_bucket",
-                TEMP_BUCKET,
-                "--dbc_path",
-                DBC_URI,
-                "--input_table",
-                f"{PROJECT_ID}.can_ids_silver.messages_with_iat",
-                "--output_table",
-                f"{PROJECT_ID}.can_ids_silver.messages_decoded_signals",
-                "--status_table",
-                f"{PROJECT_ID}.can_ids_audit.file_processing_status",
             ],
         )
 
