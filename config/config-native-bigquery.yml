@@ -1,0 +1,19 @@
+project:
+  name: xcanids-bigquery-native-sigprefix
+bigquery:
+  project_id: project-e6de9b55-41d5-4f13-ae0
+  location: europe-southwest1
+  datasets:
+    bronze_ml: can_ids_bqnative_bronze_ml
+    bronze_analytics: can_ids_bqnative_bronze_analytics
+    silver_ml: can_ids_bqnative_silver_ml
+    silver_analytics: can_ids_bqnative_silver_analytics
+    gold_ml: can_ids_bqnative_gold_ml
+    gold_analytics: can_ids_bqnative_gold_analytics
+    audit: can_ids_bqnative_audit
+gcs_paths:
+  landing:
+    raw: gs://can-ids-data-bqnative/landing/raw/
+    signal: gs://can-ids-data-bqnative/landing/signal/
+ingestion:
+  skip_existing_files: true

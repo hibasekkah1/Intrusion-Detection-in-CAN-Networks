@@ -1,156 +1,122 @@
 import argparse
-import json
 import logging
-import os
-import tempfile
-from collections import Counter
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Set, Tuple
-
-import yaml
-from google.cloud import bigquery, storage
-from pyspark.sql import DataFrame, SparkSession
-from pyspark.sql.functions import col, current_timestamp, lit, md5, concat_ws, min as spark_min
-from pyspark.sql.types import DoubleType, IntegerType, LongType
-
-try:
-    import pyarrow.parquet as pq
-except Exception:
-    pq = None
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
-ATTACK_TYPES = ["benign", "fuzz", "fabr", "masq", "susp", "repl"]
-
-
-def now_utc() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def parse_gcs_uri(uri: str) -> Tuple[str, str]:
-    if not uri.startswith("gs://"):
-        raise ValueError(f"Invalid GCS URI: {uri}")
-    return uri.replace("gs://", "", 1).split("/", 1)
-
-
-def load_yaml(path: str) -> Dict[str, Any]:
-    if path.startswith("gs://"):
-        bucket, blob = parse_gcs_uri(path)
-        return yaml.safe_load(storage.Client().bucket(bucket).blob(blob).download_as_text())
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
-
-
-def create_spark(app_name: str) -> SparkSession:
-    return (
-        SparkSession.builder
-        .appName(app_name)
-        .config("spark.sql.shuffle.partitions", "120")
-        .config("spark.default.parallelism", "120")
-        .config("spark.sql.execution.arrow.pyspark.enabled", "true")
-        .config("spark.sql.caseSensitive", "true")
-        .getOrCreate()
-    )
-
-
-def bq_table(cfg: Dict[str, Any], dataset_key: str, table_name: str) -> str:
-    project = cfg["bigquery"]["project_id"]
-    dataset = cfg["bigquery"]["datasets"][dataset_key]
-    return f"{project}.{dataset}.{table_name}"
-
-
-def read_bq(spark: SparkSession, cfg: Dict[str, Any], dataset_key: str, table_name: str) -> DataFrame:
-    return spark.read.format("bigquery").option("table", bq_table(cfg, dataset_key, table_name)).load()
-
-
-def write_bq(df: DataFrame, cfg: Dict[str, Any], dataset_key: str, table_name: str, mode: str = "append") -> None:
-    table_id = bq_table(cfg, dataset_key, table_name)
-    logging.getLogger("bq_writer").info("Writing BigQuery native table: %s", table_id)
-    (
-        df.write
-        .format("bigquery")
-        .option("table", table_id)
-        .option("writeMethod", "direct")
-        .mode(mode)
-        .save()
-    )
-
-
-def audit_table(cfg: Dict[str, Any], table_name: str) -> str:
-    project = cfg["bigquery"]["project_id"]
-    dataset = cfg["bigquery"]["datasets"]["audit"]
-    return f"{project}.{dataset}.{table_name}"
-
-
-def processed_sources(cfg: Dict[str, Any], layer: str, domain: str, representation: str) -> Set[str]:
-    client = bigquery.Client(project=cfg["bigquery"]["project_id"])
-    table = audit_table(cfg, "file_processing_status")
-    query = f"""
-    SELECT source_file
-    FROM `{table}`
-    WHERE layer = @layer
-      AND domain = @domain
-      AND representation = @representation
-      AND status = 'SUCCESS'
-    """
-    job_config = bigquery.QueryJobConfig(
-        query_parameters=[
-            bigquery.ScalarQueryParameter("layer", "STRING", layer),
-            bigquery.ScalarQueryParameter("domain", "STRING", domain),
-            bigquery.ScalarQueryParameter("representation", "STRING", representation),
-        ]
-    )
-    try:
-        return {row["source_file"] for row in client.query(query, job_config=job_config).result()}
-    except Exception:
-        return set()
-
-
-def write_audit_status(cfg: Dict[str, Any], layer: str, domain: str, representation: str, source_file: str, status: str = "SUCCESS", rows_written: int = -1, error_message: Optional[str] = None) -> None:
-    client = bigquery.Client(project=cfg["bigquery"]["project_id"])
-    table = audit_table(cfg, "file_processing_status")
-    rows = [{
-        "layer": layer,
-        "domain": domain,
-        "representation": representation,
-        "source_file": source_file,
-        "status": status,
-        "rows_written": rows_written,
-        "error_message": error_message,
-        "processed_at": now_utc(),
-    }]
-    errors = client.insert_rows_json(table, rows)
-    if errors:
-        raise RuntimeError(f"Failed to insert audit row: {errors}")
+from functools import reduce
 
 from pyspark import StorageLevel
-from pyspark.sql.functions import pmod, abs as spark_abs, hash as spark_hash, when
-logger = logging.getLogger("gold_ml_bigquery_native")
+from pyspark.sql import DataFrame
+from pyspark.sql.functions import (
+    abs as spark_abs,
+    col,
+    hash as spark_hash,
+    lit,
+    when,
+)
+
+from common_bq import (
+    ATTACK_TYPES,
+    bq_table,
+    create_spark,
+    delete_sources_rows,
+    load_yaml,
+    processed_sources,
+    read_bq,
+    table_exists,
+    write_audit_status,
+    write_bq,
+)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+logger = logging.getLogger("gold_ml_signal_big_table_no_pmod")
+
+DOMAIN = "ml"
 
 
-def add_split(df: DataFrame) -> DataFrame:
-    df = df.withColumn("split_bucket", pmod(spark_abs(spark_hash(col("event_id"))), lit(100)))
-    return df.withColumn("ml_split", when(col("split_bucket") < 70, lit("train")).when(col("split_bucket") < 90, lit("validation")).otherwise(lit("test"))).drop("split_bucket")
+def add_ml_split(df: DataFrame) -> DataFrame:
+    """
+    Add deterministic ML split without using pyspark.sql.functions.pmod.
+
+    Dataproc image Spark can miss the Python pmod wrapper. This implementation uses
+    Column modulo (%) instead:
+      split_bucket = abs(hash(event_id)) % 100
+      0-69   -> train
+      70-84  -> validation
+      85-99  -> test
+    """
+    if "event_id" not in df.columns:
+        raise RuntimeError("Gold ML requires column event_id in Silver ML signal_clean tables")
+
+    bucket = (spark_abs(spark_hash(col("event_id"))) % lit(100)).cast("int")
+
+    return (
+        df.withColumn("split_bucket", bucket)
+        .withColumn(
+            "ml_split",
+            when(col("split_bucket") < lit(70), lit("train"))
+            .when(col("split_bucket") < lit(85), lit("validation"))
+            .otherwise(lit("test")),
+        )
+        .drop("split_bucket")
+    )
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Gold ML One Big Table to BigQuery native")
+def read_silver_signal_tables(spark, cfg) -> DataFrame:
+    dfs = []
+
+    for attack_type in ATTACK_TYPES:
+        table_name = f"signal_clean_{attack_type}"
+        dataset_key = f"silver_{DOMAIN}"
+
+        if not table_exists(cfg, dataset_key, table_name):
+            logger.warning("Silver ML table missing, skipping: %s", bq_table(cfg, dataset_key, table_name))
+            continue
+
+        logger.info("Reading %s.%s", dataset_key, table_name)
+        df = read_bq(spark, cfg, dataset_key, table_name)
+        dfs.append(df)
+
+    if not dfs:
+        raise RuntimeError("No Silver ML signal_clean_* tables found")
+
+    return reduce(lambda left, right: left.unionByName(right, allowMissingColumns=True), dfs)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Gold ML signal big table without pmod import")
     parser.add_argument("--config_path", required=True)
     args = parser.parse_args()
+
     cfg = load_yaml(args.config_path)
-    spark = create_spark("gold_ml_bigquery_native")
+    spark = create_spark("gold_ml_signal_big_table_no_pmod")
+
     try:
-        df = read_bq(spark, cfg, "silver_ml", "signal_clean")
-        sources = [r["source_file"] for r in df.select("source_file").distinct().collect()]
-        done = processed_sources(cfg, "gold", "ml", "signal")
-        new_sources = [s for s in sources if s not in done]
+        df = read_silver_signal_tables(spark, cfg)
+
+        all_sources = [row["source_file"] for row in df.select("source_file").distinct().collect()]
+        done_sources = processed_sources(cfg, "gold", DOMAIN, "signal")
+        new_sources = [source for source in all_sources if source not in done_sources]
+
         if not new_sources:
-            logger.info("No new silver ML signal rows for gold ML")
+            logger.info("No new SIGNAL files for Gold ML")
             return
-        out = add_split(df.filter(col("source_file").isin(new_sources))).persist(StorageLevel.MEMORY_AND_DISK)
-        write_bq(out, cfg, "gold_ml", "signal_big_table", "append")
-        for source in new_sources:
-            write_audit_status(cfg, "gold", "ml", "signal", source, "SUCCESS")
-        out.unpersist()
+
+        logger.info("Gold ML new signal sources=%s", len(new_sources))
+
+        out = add_ml_split(df.filter(col("source_file").isin(new_sources))).persist(StorageLevel.MEMORY_AND_DISK)
+
+        try:
+            delete_sources_rows(cfg, f"gold_{DOMAIN}", "signal_big_table", new_sources)
+            write_bq(out, cfg, f"gold_{DOMAIN}", "signal_big_table", "append")
+
+            for source in new_sources:
+                write_audit_status(cfg, "gold", DOMAIN, "signal", source, "SUCCESS")
+
+            logger.info("Gold ML signal_big_table completed successfully")
+        finally:
+            out.unpersist()
+
     finally:
         spark.stop()
 
