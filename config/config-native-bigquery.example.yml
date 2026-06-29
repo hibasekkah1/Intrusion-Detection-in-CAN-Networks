@@ -1,0 +1,25 @@
+bigquery:
+  project_id: YOUR_PROJECT_ID
+  location: YOUR_REGION
+  datasets:
+    bronze_analytics: can_ids_bqnative_bronze_analytics
+    bronze_ml: can_ids_bqnative_bronze_ml
+    silver_analytics: can_ids_bqnative_silver_analytics
+    silver_ml: can_ids_bqnative_silver_ml
+    gold_analytics: can_ids_bqnative_gold_analytics
+    gold_ml: can_ids_bqnative_gold_ml
+    audit: can_ids_bqnative_audit
+
+gcs_paths:
+  landing:
+    raw: gs://YOUR_BUCKET/landing/raw
+    signal: gs://YOUR_BUCKET/landing/signal
+  spark_jobs: gs://YOUR_BUCKET/spark_jobs
+
+dataproc:
+  cluster_name: YOUR_CLUSTER_NAME
+  region: YOUR_REGION
+  zone: YOUR_ZONE
+  num_workers: 2
+  master_machine_type: e2-standard-4
+  worker_machine_type: e2-standard-4

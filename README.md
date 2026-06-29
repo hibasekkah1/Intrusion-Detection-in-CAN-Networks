@@ -34,7 +34,7 @@
 
 **Déclenchement :** Quotidien à 02h00 UTC via Cloud Scheduler
 
-**Projet GCP :** `project-e6de9b55-41d5-4f13-ae0`
+**Projet GCP :** `YOUR_PROJECT_ID`
 
 **Région :** `europe-southwest1`
 
@@ -45,11 +45,6 @@
 ## 2. Contexte et motivation
 
 Le secteur automobile connaît une évolution importante avec l'intégration croissante des systèmes embarqués et des véhicules connectés. Le réseau CAN Bus constitue l'épine dorsale de communication interne des véhicules modernes, permettant l'échange de données en temps réel entre les calculateurs électroniques. Cette connectivité accrue expose également les systèmes automobiles à des menaces de cybersécurité telles que les attaques fuzzy, les attaques replay, les attaques masquerade et les injections de messages.
-
-Avant ce projet, l'équipe travaillait directement sur des fichiers Parquet bruts téléchargés localement depuis IEEE Dataport sans aucun pipeline standardisé. Les analyses étaient réalisées dans Power BI sans modélisation de données, et les modèles de Machine Learning étaient entraînés directement sur des fichiers Parquet non transformés dans des notebooks Jupyter. Il n'existait aucune infrastructure partagée, aucune traçabilité, aucun contrôle qualité et aucune garantie de reproductibilité.
-
-Ce projet répond à ces limitations en construisant un pipeline de Data Engineering automatisé, scalable et traçable sur Google Cloud Platform, déployable en production.
-
 
 ---
 
@@ -84,9 +79,6 @@ Ce projet répond à ces limitations en construisant un pipeline de Data Enginee
 
 ## 4. Architecture globale
 
-```
-
-```
 
 
 ---
@@ -353,7 +345,7 @@ split_bucket = abs(hash(event_id)) % 100
 ## 8. Structure GCS
 
 ```
-gs://can-ids-data-bqnative/
+gs://YOUR_BUCKET_NAME/
 |
 |-- landing/
 |   |-- raw/
@@ -382,7 +374,7 @@ gs://can-ids-data-bqnative/
 |-- config/
 |   `-- config-native-bigquery.yml
 |
-`-- google-cloud-dataproc-metainfo/    <-- Logs Dataproc (généré automatiquement)
+`-- google-cloud-dataproc-metainfo/     Logs Dataproc (généré automatiquement)
 ```
 
 **Convention de nommage des fichiers :** Chaque nom de fichier Parquet doit contenir le mot-clé du type d'attaque (`benign`, `fuzz`, `fabr`, `masq`, `susp`, `repl`) pour que la fonction `detect_attack()` dans `common_bq.py` puisse détecter automatiquement le type d'attaque.
@@ -433,7 +425,7 @@ Bibliothèque partagée importée par tous les scripts Spark. Contient tous les 
 **Usage :**
 ```bash
 python 00_create_bigquery_native_schema.py \
-  --config_path gs://can-ids-data-bqnative/config/config-native-bigquery.yml
+  --config_path gs://YOUR_BUCKET_NAME/config/config-native-bigquery.yml
 ```
 
 **Ce que fait ce script :**
@@ -455,7 +447,7 @@ python 00_create_bigquery_native_schema.py \
 **Usage :**
 ```bash
 python 01_bronze_analytics_ingestion.py \
-  --config_path gs://can-ids-data-bqnative/config/config-native-bigquery.yml
+  --config_path gs://YOUR_BUCKET_NAME/config/config-native-bigquery.yml
 ```
 
 **Ce que fait ce script :**
@@ -490,7 +482,7 @@ python 01_bronze_analytics_ingestion.py \
 **Usage :**
 ```bash
 python 02_silver_analytics_clean.py \
-  --config_path gs://can-ids-data-bqnative/config/config-native-bigquery.yml
+  --config_path gs://YOUR_BUCKET_NAME/config/config-native-bigquery.yml
 ```
 
 **Ce que fait ce script :**
@@ -647,10 +639,10 @@ python orchestrate_pipeline.py --run-pipeline --step gold-ml
 
 | Variable | Valeur par défaut | Description |
 |----------|------------------|-------------|
-| PROJECT_ID | project-e6de9b55-41d5-4f13-ae0 | Identifiant du projet GCP |
+| PROJECT_ID | YOUR_PROJECT_ID | Identifiant du projet GCP |
 | REGION | europe-southwest1 | Région GCP |
-| CLUSTER_NAME | can-ids-spark-cluster | Nom du cluster Dataproc |
-| BUCKET_NAME | can-ids-data-bqnative | Bucket GCS |
+| CLUSTER_NAME | YOUR_CLUSTER_NAME | Nom du cluster Dataproc |
+| BUCKET_NAME | YOUR_BUCKET_NAME | Bucket GCS |
 | DELETE_CLUSTER_AT_END | true | Supprimer le cluster après l'exécution |
 | NUM_WORKERS | 2 | Nombre de workers Dataproc (min 2) |
 | RUN_BRONZE_ANALYTICS | true | Activer/désactiver chaque étape |
@@ -680,11 +672,11 @@ python setup_scheduler.py --delete        # Supprimer le scheduler
 
 | Paramètre | Valeur |
 |-----------|--------|
-| Nom du job | can-ids-daily-trigger |
+| Nom du job | YOUR_SCHEDULER_NAME |
 | Cron | 0 2 * * * (quotidien à 02h00 UTC) |
 | Fuseau horaire | UTC |
 | Localisation Scheduler | europe-west1 |
-| Cible | Cloud Run Job can-ids-pipeline via HTTP POST |
+| Cible | Cloud Run Job YOUR_JOB_NAME via HTTP POST |
 
 ---
 
@@ -730,7 +722,6 @@ Le pipeline est orchestré par un container Cloud Run Job qui gère le cycle de 
 
 ```
 
-```
 
 **Configuration du cluster :**
 - Master : 1x e2-standard-4 (4 vCPU, 16 Go RAM)
@@ -778,16 +769,16 @@ Après chaque écriture en couche Gold, `05_quality_checks_datamesh.py` vérifie
 
 | Service | Nom de la ressource | Rôle |
 |---------|-------------------|------|
-| Cloud Storage | can-ids-data-bqnative | Data Lake — zone d'atterrissage + scripts + configuration |
+| Cloud Storage | YOUR_BUCKET_NAME | Data Lake — zone d'atterrissage + scripts + configuration |
 | BigQuery | 7 datasets | Data Warehouse — Bronze/Silver/Gold/Audit |
-| Dataproc | can-ids-spark-cluster | Cluster Spark éphémère pour le compute |
-| Cloud Run Jobs | can-ids-pipeline | Orchestrateur du pipeline sans serveur |
-| Cloud Scheduler | can-ids-daily-trigger | Déclenchement cron quotidien (02h00 UTC) |
-| Artifact Registry | can-ids-containers | Registre des images Docker |
+| Dataproc | YOUR_CLUSTER_NAME | Cluster Spark éphémère pour le compute |
+| Cloud Run Jobs | YOUR_JOB_NAME | Orchestrateur du pipeline sans serveur |
+| Cloud Scheduler | YOUR_SCHEDULER_NAME | Déclenchement cron quotidien (02h00 UTC) |
+| Artifact Registry | YOUR_REGISTRY_NAME | Registre des images Docker |
 | Cloud Monitoring | — | 7 politiques d'alerte + 6 métriques personnalisées |
 | Cloud Build | — | Construction et publication de l'image Docker |
 
-**Compte de service :** `can-ids-orchestrator-sa@project-e6de9b55-41d5-4f13-ae0.iam.gserviceaccount.com`
+**Compte de service :** `YOUR_SERVICE_ACCOUNT@YOUR_PROJECT_ID.iam.gserviceaccount.com`
 
 **Rôles IAM requis :**
 - roles/bigquery.admin
@@ -810,7 +801,7 @@ Après chaque écriture en couche Gold, `05_quality_checks_datamesh.py` vérifie
 # Installation du SDK Google Cloud
 gcloud auth login
 gcloud auth application-default login
-gcloud config set project project-e6de9b55-41d5-4f13-ae0
+gcloud config set project YOUR_PROJECT_ID
 ```
 
 ### Étape 1 — Activer les APIs GCP
@@ -829,35 +820,35 @@ gcloud services enable \
 ### Étape 2 — Créer le bucket GCS
 
 ```bash
-gsutil mb -l europe-southwest1 gs://can-ids-data-bqnative
+gsutil mb -l europe-southwest1 gs://YOUR_BUCKET_NAME
 ```
 
 ### Étape 3 — Uploader les fichiers
 
 ```bash
 # Scripts Spark
-gsutil -m cp spark_jobs/*.py gs://can-ids-data-bqnative/spark_jobs/
+gsutil -m cp spark_jobs/*.py gs://YOUR_BUCKET_NAME/spark_jobs/
 
 # Configuration
-gsutil cp config-native-bigquery.yml gs://can-ids-data-bqnative/config/
+gsutil cp config-native-bigquery.yml gs://YOUR_BUCKET_NAME/config/
 
 # Données X-CANIDS
-gsutil -m cp data/raw/*.parquet gs://can-ids-data-bqnative/landing/raw/
-gsutil -m cp data/signal/*.parquet gs://can-ids-data-bqnative/landing/signal/
+gsutil -m cp data/raw/*.parquet gs://YOUR_BUCKET_NAME/landing/raw/
+gsutil -m cp data/signal/*.parquet gs://YOUR_BUCKET_NAME/landing/signal/
 ```
 
 ### Étape 4 — Créer le schéma BigQuery
 
 ```bash
 python 00_create_bigquery_native_schema.py \
-  --config_path gs://can-ids-data-bqnative/config/config-native-bigquery.yml
+  --config_path gs://YOUR_BUCKET_NAME/config/config-native-bigquery.yml
 ```
 
 ### Étape 5 — Construire et déployer l'image Docker
 
 ```bash
 gcloud builds submit \
-  --tag=europe-southwest1-docker.pkg.dev/project-e6de9b55-41d5-4f13-ae0/can-ids-containers/orchestrator:latest \
+  --tag=europe-southwest1-docker.pkg.dev/YOUR_PROJECT_ID/YOUR_REGISTRY_NAME/orchestrator:latest \
   --region=europe-southwest1 \
   .
 ```
@@ -865,19 +856,19 @@ gcloud builds submit \
 ### Étape 6 — Déployer le Cloud Run Job
 
 ```bash
-gcloud run jobs deploy can-ids-pipeline \
-  --image=europe-southwest1-docker.pkg.dev/project-e6de9b55-41d5-4f13-ae0/can-ids-containers/orchestrator:latest \
+gcloud run jobs deploy YOUR_JOB_NAME \
+  --image=europe-southwest1-docker.pkg.dev/YOUR_PROJECT_ID/YOUR_REGISTRY_NAME/orchestrator:latest \
   --region=europe-southwest1 \
-  --service-account=can-ids-orchestrator-sa@project-e6de9b55-41d5-4f13-ae0.iam.gserviceaccount.com \
+  --service-account=YOUR_SERVICE_ACCOUNT@YOUR_PROJECT_ID.iam.gserviceaccount.com \
   --task-timeout=10800 \
   --max-retries=1 \
-  --set-env-vars="PROJECT_ID=project-e6de9b55-41d5-4f13-ae0,REGION=europe-southwest1,NUM_WORKERS=2,DELETE_CLUSTER_AT_END=true"
+  --set-env-vars="PROJECT_ID=YOUR_PROJECT_ID,REGION=europe-southwest1,NUM_WORKERS=2,DELETE_CLUSTER_AT_END=true"
 ```
 
 ### Étape 7 — Configurer le Monitoring et le Scheduler
 
 ```bash
-export NOTIFICATION_EMAIL="hiba.sekkah@exemple.com"
+export NOTIFICATION_EMAIL="YOUR_EMAIL"
 export SCHEDULER_LOCATION="europe-west1"
 
 python setup_monitoring.py --deploy
@@ -894,9 +885,9 @@ python setup_scheduler.py --deploy
 
 ```bash
 # Via Cloud Run Job
-gcloud run jobs execute can-ids-pipeline \
+gcloud run jobs execute YOUR_JOB_NAME \
   --region=europe-southwest1 \
-  --project=project-e6de9b55-41d5-4f13-ae0 \
+  --project=YOUR_PROJECT_ID \
   --wait
 
 # Via le Scheduler (sans attendre le cron)
@@ -909,7 +900,7 @@ python orchestrate_pipeline.py --run-pipeline
 ### Lancer une étape unique
 
 ```bash
-gcloud run jobs execute can-ids-pipeline \
+gcloud run jobs execute YOUR_JOB_NAME \
   --region=europe-southwest1 \
   --update-env-vars="RUN_BRONZE_ANALYTICS=false,RUN_SILVER_ANALYTICS=false,RUN_GOLD_ANALYTICS=false,RUN_BRONZE_ML=false,RUN_SILVER_ML=false,RUN_GOLD_ML=true,RUN_QUALITY_CHECKS=false"
 ```
@@ -919,12 +910,12 @@ gcloud run jobs execute can-ids-pipeline \
 ```bash
 # Voir les exécutions
 gcloud run jobs executions list \
-  --job=can-ids-pipeline \
+  --job=YOUR_JOB_NAME \
   --region=europe-southwest1
 
 # Voir les logs en temps réel
 gcloud logging read \
-  'resource.type="cloud_run_job" AND resource.labels.job_name="can-ids-pipeline"' \
+  'resource.type="cloud_run_job" AND resource.labels.job_name="YOUR_JOB_NAME"' \
   --format="value(textPayload)" \
   --limit=100 \
   --freshness=1h
@@ -946,7 +937,7 @@ bq query --use_legacy_sql=false \
 
 ```yaml
 bigquery:
-  project_id: project-e6de9b55-41d5-4f13-ae0
+  project_id: YOUR_PROJECT_ID
   location: europe-southwest1
   datasets:
     bronze_analytics: can_ids_bqnative_bronze_analytics
@@ -959,12 +950,12 @@ bigquery:
 
 gcs_paths:
   landing:
-    raw: gs://can-ids-data-bqnative/landing/raw
-    signal: gs://can-ids-data-bqnative/landing/signal
-  spark_jobs: gs://can-ids-data-bqnative/spark_jobs
+    raw: gs://YOUR_BUCKET_NAME/landing/raw
+    signal: gs://YOUR_BUCKET_NAME/landing/signal
+  spark_jobs: gs://YOUR_BUCKET_NAME/spark_jobs
 
 dataproc:
-  cluster_name: can-ids-spark-cluster
+  cluster_name: YOUR_CLUSTER_NAME
   region: europe-southwest1
   zone: europe-southwest1-a
   num_workers: 2

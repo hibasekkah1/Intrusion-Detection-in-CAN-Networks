@@ -1,9 +1,0 @@
-steps:
-  - name: gcr.io/cloud-builders/docker
-    args:
-      - build
-      - -t
-      - europe-southwest1-docker.pkg.dev/project-e6de9b55-41d5-4f13-ae0/can-ids-repo/can-ids-orchestrator:latest
-      - .
-images:
-  - europe-southwest1-docker.pkg.dev/project-e6de9b55-41d5-4f13-ae0/can-ids-repo/can-ids-orchestrator:latest

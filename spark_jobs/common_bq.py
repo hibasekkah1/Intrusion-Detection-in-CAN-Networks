@@ -81,19 +81,6 @@ def sanitize_bq_column_name(name: str) -> str:
     if safe[0].isdigit(): safe = f"sig_{safe}"
     return safe
 def make_unique_columns(cols: List[str]) -> List[str]:
-    """
-    Rend les colonnes uniques pour BigQuery.
-
-    Important :
-    BigQuery peut considérer deux colonnes comme conflictuelles
-    si elles ne diffèrent que par la casse.
-    Exemple :
-      sig_559_CF_Gway_PBACKStopCmd
-      sig_559_CF_Gway_PBackStopCmd
-
-    Donc on utilise une clé lowercase pour détecter les doublons,
-    mais on garde le nom lisible original autant que possible.
-    """
     counts = Counter()
     out = []
 

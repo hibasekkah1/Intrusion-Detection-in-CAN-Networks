@@ -1,28 +1,3 @@
-"""
-setup_monitoring.py
-====================
-Configure Cloud Monitoring pour le pipeline CAN IDS :
-  - Canal de notification email
-  - 4 alertes (pipeline failure, step failure, durée excessive, logs erreur)
-  - Métriques custom poussées depuis l'orchestrateur
-
-Responsabilité unique : créer les alertes et canaux de notification.
-Les métriques custom sont poussées par orchestrate_pipeline.py.
-
-Utilisation :
-  # Déployer toutes les alertes
-  python setup_monitoring.py --deploy
-
-  # Voir les alertes existantes
-  python setup_monitoring.py --status
-
-  # Supprimer toutes les alertes du pipeline
-  python setup_monitoring.py --delete
-
-  # Pousser une métrique de test
-  python setup_monitoring.py --test-metric
-"""
-
 import argparse
 import logging
 import os

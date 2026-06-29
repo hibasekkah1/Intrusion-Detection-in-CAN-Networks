@@ -40,3 +40,5 @@ desktop.ini
 .env
 *.json
 .venv/
+
+config/config-native-bigquery.yml

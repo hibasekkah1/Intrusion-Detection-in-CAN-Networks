@@ -1,28 +1,3 @@
-"""
-setup_scheduler.py
-===================
-Configure Cloud Scheduler pour déclencher le Cloud Run Job
-du pipeline CAN IDS selon un cron quotidien.
-
-Responsabilité unique : créer / mettre à jour le Cloud Scheduler Job.
-
-Utilisation :
-  # Créer ou mettre à jour le scheduler
-  python setup_scheduler.py --deploy
-
-  # Voir le scheduler existant
-  python setup_scheduler.py --status
-
-  # Déclencher manuellement via le scheduler (sans attendre le cron)
-  python setup_scheduler.py --trigger-now
-
-  # Supprimer le scheduler
-  python setup_scheduler.py --delete
-
-  # Modifier le cron
-  SCHEDULER_CRON="0 3 * * *" python setup_scheduler.py --deploy
-"""
-
 import argparse
 import logging
 import os

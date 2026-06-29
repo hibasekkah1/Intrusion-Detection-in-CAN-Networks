@@ -1,21 +1,3 @@
-"""
-02_silver_ml_clean.py
-======================
-Pipeline : Bronze ML → Silver ML
-
-Stratégie :
-  - Mode normal (--attack_type all) :
-      1 seul job Spark → lit toutes les attaques en union → dispatch par attack_type
-      Même approche que silver_analytics → rapide, 1 seul contexte YARN
-
-  - Mode reprise partielle (--attack_type fuzz) :
-      1 attaque uniquement → utile pour relancer une attaque échouée
-      sans retraiter l'ensemble du pipeline
-
-  - Mode représentation (--representation raw|signal|all) :
-      Filtrer sur raw, signal, ou les deux
-"""
-
 import argparse
 import logging
 from functools import reduce

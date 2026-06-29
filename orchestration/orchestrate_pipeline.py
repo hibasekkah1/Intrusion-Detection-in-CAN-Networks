@@ -1,16 +1,3 @@
-"""
-orchestrate_pipeline.py
-========================
-Orchestrateur du pipeline CAN IDS — Cloud Run Job.
-
-Responsabilité unique : soumettre et monitorer les jobs Dataproc
-dans le bon ordre. Ne gère pas le Scheduler ni le Monitoring.
-
-Utilisation :
-  python orchestrate_pipeline.py --run-pipeline
-  python orchestrate_pipeline.py --run-pipeline --step bronze-analytics
-"""
-
 import json
 import logging
 import os
@@ -22,10 +9,6 @@ from typing import Dict, List, Optional
 from google.api_core.exceptions import AlreadyExists, NotFound
 from google.cloud import dataproc_v1
 
-
-# ═══════════════════════════════════════════════════════════════
-# LOGGING — JSON structuré pour Cloud Logging
-# ═══════════════════════════════════════════════════════════════
 
 class CloudLoggingFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
@@ -61,9 +44,6 @@ def setup_logging() -> logging.Logger:
 logger = setup_logging()
 
 
-# ═══════════════════════════════════════════════════════════════
-# CONFIGURATION
-# ═══════════════════════════════════════════════════════════════
 
 PROJECT_ID   = os.getenv("PROJECT_ID",   "project-e6de9b55-41d5-4f13-ae0")
 REGION       = os.getenv("REGION",       "europe-southwest1")
@@ -78,7 +58,6 @@ SPARK_JOBS_URI = os.getenv("SPARK_JOBS_URI", f"gs://{BUCKET_NAME}/spark_jobs")
 BIGQUERY_JAR   = os.getenv("BIGQUERY_JAR",   "gs://spark-lib/bigquery/spark-bigquery-latest_2.12.jar")
 COMMON_PY      = f"{SPARK_JOBS_URI.rstrip('/')}/common_bq.py"
 
-# Pipeline switches
 DELETE_CLUSTER_AT_END  = os.getenv("DELETE_CLUSTER_AT_END",  "true").lower()  == "true"
 RUN_BRONZE_ANALYTICS   = os.getenv("RUN_BRONZE_ANALYTICS",   "true").lower()  == "true"
 RUN_SILVER_ANALYTICS   = os.getenv("RUN_SILVER_ANALYTICS",   "true").lower()  == "true"
@@ -91,7 +70,6 @@ RUN_QUALITY_CHECKS     = os.getenv("RUN_QUALITY_CHECKS",     "true").lower()  ==
 
 ATTACK_TYPES = os.getenv("ATTACK_TYPES", "benign,fabr,fuzz,masq,repl,susp").split(",")
 
-# Dataproc sizing
 MASTER_MACHINE_TYPE = os.getenv("MASTER_MACHINE_TYPE", "e2-standard-4")
 WORKER_MACHINE_TYPE = os.getenv("WORKER_MACHINE_TYPE", "e2-standard-4")
 NUM_WORKERS         = int(os.getenv("NUM_WORKERS",      "1"))
